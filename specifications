@@ -1,0 +1,52 @@
+Makefile
+model.so
+model.cpp
+model.expmap
+model.moc
+model.vve
+matrix.h
+vector.h
+material.mat
+dlobject.h
+view.v
+pal.map
+anim.a
+description.txt
+cuda.cu
+cuda.exp
+cuda.mk
+cuda.ci
+LSspecifications
+ignore:
+cpp.cpp
+so.so
+*.o
+*~
+*
+Run:
+	gnome-terminal -x bash -c "make run"
+
+LabTable:
+	nautilus .
+
+LabTableShell:
+	gnome-terminal -x bash
+
+Video:
+	make video
+
+Controls:
+	ColorPalette:
+		palette pal.map
+
+Files:
+	description.txt:
+		OBJED description.txt
+	view.v:
+		OBJED view.v
+	Makefile:
+		OBJED Makefile
+	model.cpp:
+		OBJED model.cpp
+	cuda.cu:
+		OBJED cuda.cu

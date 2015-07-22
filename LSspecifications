@@ -1,0 +1,5 @@
+ignore:
+tissue.exe
+*
+vverun.bat
+build command: vveshell.bat

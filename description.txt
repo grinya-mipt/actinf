@@ -1,0 +1,4 @@
+Simulation of Jello using GPU
+
+This one uses (slightly) adapted vector class
+
