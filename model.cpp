@@ -82,6 +82,7 @@ public:
   float FrameSteps;				// Steps per frame
   bool PrintStats;				// Print out stats
   bool Parallel;				// Use Cuda
+  int SeedRandom;        // Seed for random numbers
 
   float KR;					// Regular spring constant
   float Damp;					// Spring dampening
@@ -123,6 +124,8 @@ public:
     parms("Main", "FrameSteps", FrameSteps);
     parms("Main", "PrintStats", PrintStats);
     parms("Main", "Parallel", Parallel);
+    parms("Main", "SeedRandom", SeedRandom);
+
 
     parms("Spring", "KR", KR);
     parms("Spring", "Damp", Damp);
@@ -150,9 +153,10 @@ public:
   {
     // Read the parameters
     readParms();
+    //srand(SeedRandom==0?time(NULL):SeedRandom);
 
-    createRandomFilament( (0.5-((double)rand()/(double)RAND_MAX))*2 * BoxSize[0]  * CellSize,	(0.5-((double)rand()/(double)RAND_MAX))*2 * BoxSize[0]  * CellSize, 
-						  (0.5-((double)rand()/(double)RAND_MAX))*2 * BoxSize[1]  * CellSize,	(0.5-((double)rand()/(double)RAND_MAX))*2 * BoxSize[1]  * CellSize,
+    createRandomFilament( unifRand(.0, 2.) * BoxSize[0]  * CellSize,	unifRand(.0, 2.) * BoxSize[0]  * CellSize, 
+						  unifRand(.0, 2.) * BoxSize[1]  * CellSize,	unifRand(.0, 2.) * BoxSize[1]  * CellSize,
 						   -(double)BoxSize[2]*CellSize											,	(double)BoxSize[2]*CellSize);
 
 	cout << "Hey" << endl;
@@ -170,8 +174,8 @@ public:
 
   void step()
   {	
-	if(time<10) createRandomFilament( (0.5-((double)rand()/(double)RAND_MAX))*2 * BoxSize[0]  * CellSize,	(0.5-((double)rand()/(double)RAND_MAX))*2 * BoxSize[0]  * CellSize, 
-									  (0.5-((double)rand()/(double)RAND_MAX))*2 * BoxSize[1]  * CellSize,	(0.5-((double)rand()/(double)RAND_MAX))*2 * BoxSize[1]  * CellSize,
+	if(time<100000) createRandomFilament( unifRand(.0, 2.) * BoxSize[0]  * CellSize,	unifRand(.0, 2.) * BoxSize[0]  * CellSize, 
+									  unifRand(.0, 2.) * BoxSize[1]  * CellSize,	unifRand(.0, 2.) * BoxSize[1]  * CellSize,
 									  -(double)BoxSize[2]*CellSize											,	(double)BoxSize[2]*CellSize);	 
 
     if(Parallel) {
@@ -186,6 +190,8 @@ public:
     } else {
       for(int i = 0; i < FrameSteps; i++) {
         // Find force on vertivces
+        forall(const vertex &v, S)
+		  v->force=Vec3f(0,0,0);
         forall(const vertex &v, S) {  
           if (v->border1) v->force.set(0.,0.,std::max(0.,(double)(1000-time)/1000));
 
@@ -201,9 +207,10 @@ public:
         
         forall(const vertex &v, S) {  
           // Move points
-          v->vel += Dt * (v->force); //- (Damp * v->vel));
-          if(v->border1) v->pos += Dt * v->vel;
-
+          if(!v->border2){
+            v->vel += Dt * (v->force - (Damp * v->vel));
+            v->pos += Dt * v->vel;
+		  }
           // Hit the box
           if(v->pos.x() > BoxSize.x()) {
             v->pos.x() = BoxSize.x();
@@ -243,7 +250,7 @@ public:
     }
 
     if(PrintStats && !(steps % 100))
-      cout << "Explicit step " << steps << endl;
+      cout << "Explicit step. Steps: " << steps << ". Time: " << time << endl;
   }
   
    void createRandomFilament(double x1,double x2,double y1,double y2,double z1,double z2){
@@ -261,6 +268,7 @@ public:
       w->pos.y() = y2;
       w->pos.z() = z2;
       w->draw = true;
+      w->border2 = true;
       
       S.insertEdge(v, w);
       S.edge(v, w)->draw = true;
@@ -270,6 +278,10 @@ public:
       S.edge(w, v)->draw = true;
       S.edge(w, v)->restlen = 1;//norm(w->pos - v->pos);
 	}
+	
+	double unifRand(double mean, double width) { 
+    return(mean + (double(rand())/double(RAND_MAX) - 0.5) * width); 
+  }
 
   // Initialize drawing
   void initDraw(Viewer* viewer) 
