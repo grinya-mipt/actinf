@@ -13,9 +13,11 @@ SeedRandom: 0
 
 [Spring]
 KR: 200					// Regular spring constant
+KB: 20
 Damp: .3				// Spring dampening
 RestLength: 1				// Spring rest length
 PrintForce: false			// Print out force vectors
 Gravity: 0				// Gravity strength
 Friction: 50				// Friction when it hits the walls
 Thresold: .004				// Threshold velocity for surface tension
+RestLenght: 1

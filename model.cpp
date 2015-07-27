@@ -32,26 +32,23 @@ public:
   Vec3f pos;					// postition
   Vec3f vel;					// velocity
   Vec3f force;					// Uniform force on points
-  //Vec3f nrml;					// Normal vector
 
-  //int edges;					// Number of edges the vertex is on
-  //int face;					// Which face vertex is on
-  bool border1;
-  bool border2;					
+  bool barb;					// barbed or pointed end
   bool draw;					// Draw vertex
 
   // Constructor, set initial values
-  VertexData() : pos(0,0,0), vel(0,0,0), force(0,0,0), border1(false), border2(false), draw(false) {}
+  VertexData() : pos(0,0,0), vel(0,0,0), force(0,0,0), barb(false), draw(false) {}
 };
 
 class EdgeData
 {
 public:
   float restlen;				// rest length of springs
-  bool draw;              
+  bool draw;
+  Vec3f dir;              
 
   // Constructor, set initial values
-  EdgeData(): restlen(0), draw(false) {}
+  EdgeData(): restlen(0), draw(false), dir(0,0,0) {}
 };
 
 // Type of the VV graph
@@ -71,7 +68,7 @@ class myModel : public Model
 {
 public:
   // Parameters
-  float Dt;					// Timestep
+  float Dt;					// timingstep
   //Vec3i CubeSize;				// Size of cube
   Vec3f BoxSize;				// Size of box
   float CellSize;				// Size of cells
@@ -82,14 +79,16 @@ public:
   float FrameSteps;				// Steps per frame
   bool PrintStats;				// Print out stats
   bool Parallel;				// Use Cuda
-  int SeedRandom;        // Seed for random numbers
+  int SeedRandom;        			// Seed for random numbers
 
   float KR;					// Regular spring constant
+  float KB;
   float Damp;					// Spring dampening
   bool PrintForce;				// Print out force vectors
   float Gravity;				// Gravity strength
   float Friction;				// Friction when cube hits wall
   float Threshold;				// Threshold velocity under which vertices on surface don't move
+  float RestLenght;			
 
 private:
   // Model variables
@@ -100,7 +99,7 @@ private:
   util::Materials materials;			// Materials
 
   int steps;					// Step count
-  float time;					// Time counter
+  float timing;					// timing counter
   Vec3f gravity;				// Gravity vector
 
   DNObjT nhbd;					// Distributed objects
@@ -126,13 +125,14 @@ public:
     parms("Main", "Parallel", Parallel);
     parms("Main", "SeedRandom", SeedRandom);
 
-
     parms("Spring", "KR", KR);
+    parms("Spring", "KB", KB);
     parms("Spring", "Damp", Damp);
     parms("Spring", "PrintForce", PrintForce);
     parms("Spring", "Gravity", Gravity);
     parms("Spring", "Friction", Friction);
     parms("Spring", "Thresold", Threshold);
+    parms("Spring", "RestLenght", RestLenght);
   }
 
   // Here, reread the files when they are modified
@@ -153,14 +153,20 @@ public:
   {
     // Read the parameters
     readParms();
-    //srand(SeedRandom==0?time(NULL):SeedRandom);
+    srand(SeedRandom==0?time(0):SeedRandom);
 
-    createRandomFilament( unifRand(.0, 2.) * BoxSize[0]  * CellSize,	unifRand(.0, 2.) * BoxSize[0]  * CellSize, 
-						  unifRand(.0, 2.) * BoxSize[1]  * CellSize,	unifRand(.0, 2.) * BoxSize[1]  * CellSize,
-						   -(double)BoxSize[2]*CellSize											,	(double)BoxSize[2]*CellSize);
-
-	cout << "Hey" << endl;
-    time = 0;
+    
+    Vec3f r1,r2;
+    for(int i=0;i<1;i++) // SPECIFY NUMBER OF Filaments
+      {
+	r1=Vec3f(unifRand(.0, 2.) * BoxSize[0],unifRand(.0, 2.) * BoxSize[1],unifRand(.0, 2.) * BoxSize[2]) * CellSize;
+	r2=Vec3f(unifRand(.0, 2.) * BoxSize[0],unifRand(.0, 2.) * BoxSize[1],unifRand(.0, 2.) * BoxSize[2]) * CellSize;
+	createFilament(r1,r2,RestLenght);
+      }
+      
+    growFilament(Vec3f(unifRand(.0, 2.) * BoxSize[0],unifRand(.0, 2.) * BoxSize[1],unifRand(.0, 2.) * BoxSize[2]) * CellSize, RestLenght);
+						
+    timing = 0;
     steps = 0;
 
     nhbd.allocCopyToDevice();
@@ -174,9 +180,6 @@ public:
 
   void step()
   {	
-	if(time<100000) createRandomFilament( unifRand(.0, 2.) * BoxSize[0]  * CellSize,	unifRand(.0, 2.) * BoxSize[0]  * CellSize, 
-									  unifRand(.0, 2.) * BoxSize[1]  * CellSize,	unifRand(.0, 2.) * BoxSize[1]  * CellSize,
-									  -(double)BoxSize[2]*CellSize											,	(double)BoxSize[2]*CellSize);	 
 
     if(Parallel) {
       // Call cuda to do the work
@@ -184,34 +187,60 @@ public:
       // Get data back from cuda
       pos.copyToHost();
 
-      // Update time
+      // Update timing
       steps += FrameSteps;
-      time += Dt * FrameSteps;
+      timing += Dt * FrameSteps;
     } else {
       for(int i = 0; i < FrameSteps; i++) {
-        // Find force on vertivces
-        forall(const vertex &v, S)
-		  v->force=Vec3f(0,0,0);
-        forall(const vertex &v, S) {  
-          if (v->border1) v->force.set(0.,0.,std::max(0.,(double)(1000-time)/1000));
+        findForces();   
+	findTorques();     
+	movePoints();
+      }
+    }
 
-           // Force in walls
-          forall(const vertex &n, S.neighbors(v)) {
-            // Spring forces
-            Vec3f dir = n->pos - v->pos;
-            float len = norm(dir);
-            dir /= len;
-            v->force += dir * (len - S.edge(v, n)->restlen) * KR;
-          }
-        }
-        
-        forall(const vertex &v, S) {  
-          // Move points
-          if(!v->border2){
-            v->vel += Dt * (v->force - (Damp * v->vel));
-            v->pos += Dt * v->vel;
-		  }
+    if(PrintStats && !(steps % 100))
+      cout << "Explicit step. Steps: " << steps << ". timing: " << timing << endl;
+  }
+  
+  void findForces()
+  {
+    forall(const vertex &v, S) v->force=Vec3f(0,0,0);
+    forall(const vertex &v, S) {
+	//Apply test force  
+	// if (v->border1) v->force.set(0.,0.,std::max(0.,(float)(1000-timing)/1000));
+	//Spring forces
+        forall(const vertex &n, S.neighbors(v)) v->force += normalized(n->pos - v->pos) * (norm(n->pos - v->pos) - S.edge(v, n)->restlen) * KR;
+    }
+  }
+  
+  void findTorques()
+  {
+    vertex n1;
+    Vec3f tmp;
+    float phi; 
+    forall(const vertex &v, S)
+    {
+      n1 = S.anyIn(v);
+      forall(const vertex &n2, S.neighbors(v)){
+	  if(n2!=n1){
+	    phi = angle(S.edge(v,n1)->dir, S.edge(v,n2)->dir);
+	    // here ^ is cross product
+	    tmp = S.edge(v,n1)->dir ^ S.edge(v,n2)->dir;
+	    n1->force += normalized(S.edge(v,n1)->dir ^ tmp) * KB * phi;
+	    n2->force += normalized(tmp ^ S.edge(v,n2)->dir) * KB * phi;
+	  }
+	}
+    }
+  }
+  
+  void movePoints()
+  {
+    forall(const vertex &v, S) 
+    {
+      v->vel += Dt * (v->force - (Damp * v->vel));
+      v->pos += Dt * v->vel;       
           // Hit the box
+	  /*
           if(v->pos.x() > BoxSize.x()) {
             v->pos.x() = BoxSize.x();
             v->vel -= Dt * v->vel * Friction * v->vel.x() * v->vel.x();
@@ -231,7 +260,7 @@ public:
             v->pos.y() = -BoxSize.y();
             v->vel -= Dt * v->vel * Friction * v->vel.y() * v->vel.y();
             v->vel.y() = 0;
-          }/*
+          }
           if(v->pos.z() > BoxSize.z()) {
             v->pos.z() = BoxSize.z();
             v->vel -= Dt * v->vel * Friction * v->vel.z() * v->vel.z();
@@ -243,44 +272,76 @@ public:
             v->vel.z() = 0;
           }*/
 
-          steps++;
-          time += Dt;
-	   }
-      }
-    }
-
-    if(PrintStats && !(steps % 100))
-      cout << "Explicit step. Steps: " << steps << ". Time: " << time << endl;
+      steps++;
+      timing += Dt;
+    }	    
   }
   
-   void createRandomFilament(double x1,double x2,double y1,double y2,double z1,double z2){
-	  vertex v;
-      S.insert(v);
-      v->pos.x() = x1;
-      v->pos.y() = y1;
-      v->pos.z() = z1;
-      v->draw = true;
-      v->border1 = true;
-	 
-	 vertex w;
-      S.insert(w);
-	  w->pos.x() = x2;
-      w->pos.y() = y2;
-      w->pos.z() = z2;
-      w->draw = true;
-      w->border2 = true;
+  void createFilament(Vec3f r1, Vec3f r2, float restlen)
+  {
+    vertex v;
+    S.insert(v);
+    v->pos.x() = r1.x();
+    v->pos.y() = r1.y();
+    v->pos.z() = r1.z();
+    v->draw = true;
+    v->barb = true;
+    vertex w;
+    S.insert(w);
+    w->pos.x() = r2.x();
+    w->pos.y() = r2.y();
+    w->pos.z() = r2.z();
+    w->draw = true;
       
-      S.insertEdge(v, w);
-      S.edge(v, w)->draw = true;
-      S.edge(v, w)->restlen = 1;//norm(w->pos - v->pos);
-      
-      S.insertEdge(w, v);
-      S.edge(w, v)->draw = true;
-      S.edge(w, v)->restlen = 1;//norm(w->pos - v->pos);
-	}
+    S.insertEdge(v, w);
+    S.edge(v, w)->draw = true;
+    S.edge(v, w)->restlen = restlen;
+    S.edge(v, w)->dir = normalized(v->pos-w->pos);      
+    S.insertEdge(w, v);
+    S.edge(w, v)->draw = true;
+    S.edge(w, v)->restlen = restlen;
+    S.edge(w, v)->dir = - S.edge(v, w)->dir;
+  }
+  
+  void growFilament(Vec3f r,float restlen)
+  {
+    int growthrate = 0;
+    vertex n= S.any();
+    forall(const vertex &w, S.neighbors(n))
+      if(S.valence(w) == 1 && growthrate < 1) {
+	vertex v;
+	S.insert(v);
+	v->pos.x() = r.x();
+	v->pos.y() = r.y();
+	v->pos.z() = r.z();
+	v->draw = true;
+	S.insertEdge(v,w);
+	S.edge(v, w)->draw = true;
+	S.edge(v, w)->restlen = restlen;
+	S.edge(v, w)->dir = normalized(v->pos-w->pos);
+	S.insertEdge(w,v);
+	S.edge(w, v)->draw = true;
+	S.edge(w, v)->restlen = restlen;
+	S.edge(w, v)->dir = - S.edge(v, w)->dir;
+	growthrate++;
+      }
+  }
+  
+  void insertSpring(vertex v, vertex w, float restlen)
+  {
+    S.insertEdge(v, w);
+    S.edge(v, w)->draw = true;
+    S.edge(v, w)->restlen = restlen;
+    S.edge(v, w)->dir = normalized(v->pos-w->pos);      
+    S.insertEdge(w, v);
+    S.edge(w, v)->draw = true;
+    S.edge(w, v)->restlen = restlen;
+    S.edge(w, v)->dir = - S.edge(v, w)->dir;
+  }
 	
-	double unifRand(double mean, double width) { 
-    return(mean + (double(rand())/double(RAND_MAX) - 0.5) * width); 
+  float unifRand(float mean, float width)
+  { 
+    return(mean + (float(rand())/float(RAND_MAX) - 0.5) * width); 
   }
 
   // Initialize drawing
