@@ -33,11 +33,22 @@ public:
   Vec3f vel;					// velocity
   Vec3f force;					// Uniform force on points
 
+  Vec3f RK4 [8];                                 //Data for Runge-Khutta method     
+
   bool barb;					// barbed or pointed end
   bool draw;					// Draw vertex
 
   // Constructor, set initial values
-  VertexData() : pos(0,0,0), vel(0,0,0), force(0,0,0), barb(false), draw(false) {}
+  VertexData() : pos(0,0,0), vel(0,0,0), force(0,0,0), barb(false), draw(false) {
+		    RK4[0]=Vec3f(0,0,0);
+		    RK4[1]=Vec3f(0,0,0);
+		    RK4[2]=Vec3f(0,0,0);
+		    RK4[3]=Vec3f(0,0,0);
+		    RK4[4]=Vec3f(0,0,0);
+		    RK4[5]=Vec3f(0,0,0);
+		    RK4[6]=Vec3f(0,0,0);
+		    RK4[7]=Vec3f(0,0,0);
+		    }
 };
 
 class EdgeData
@@ -196,9 +207,8 @@ public:
       timing += Dt * FrameSteps;
     } else {
       for(int i = 0; i < FrameSteps; i++) {
-        findForces();   
-	findTorques();     
-	movePoints();
+        findForces();       
+	RungeKhutta4();
       }
     }
 
@@ -209,44 +219,131 @@ public:
   void findForces()
   {
     forall(const vertex &v, S) v->force=Vec3f(0,0,0);
-    forall(const vertex &v, S) {
-	//Apply test force  
-	// if (v->border1) v->force.set(0.,0.,std::max(0.,(float)(1000-timing)/1000));
-	//Spring forces
-        forall(const vertex &n, S.neighbors(v)) v->force += normalized(n->pos - v->pos) * (norm(n->pos - v->pos) - S.edge(v, n)->restlen) * KR;
-    }
-  }
-  
-  void findTorques()
-  {
     vertex n1;
-    Vec3f a,b;
+    Vec3f a,b,c,d;
     float phi; 
     forall(const vertex &v, S)
     {
       n1 = S.anyIn(v);
       forall(const vertex &n2, S.neighbors(v)){
-	  if(n2!=n1){
-	    a = normalized(S.target(S.edge(v,n1))->pos-S.source(S.edge(v,n1))->pos);
-	    b = normalized(S.target(S.edge(v,n2))->pos-S.source(S.edge(v,n2))->pos);
+	if(n2!=n1){
+	    c = S.target(S.edge(v,n1))->pos;
+	    d = S.source(S.edge(v,n1))->pos;
+	    a = normalized(c-d);
+	    c = S.target(S.edge(v,n2))->pos;
+	    d = S.source(S.edge(v,n2))->pos;
+	    b = normalized(c-d);
 	    phi = angle(a, b);
 	    // here ^ is cross product
 	    n1->force += normalized(a ^ (a ^ b)) * KB * phi;
 	    n2->force += normalized((a ^ b) ^ b) * KB * phi;
 	  }
-	}
+	a = n2->pos;
+	b = v->pos;
+	v->force += normalized(a - b) * (norm(a - b) - S.edge(v, n2)->restlen) * KR;
+      }
     }
   }
-  /*
-  void findTorquesImplicit(float h, float alpha)
+
+  void findVel()
   {
-    forall(const vertex &v, S) 
-    {
-      v->vel += h * (v->force - (Damp * v->vel));
-      v->pos += h * v->vel; 
-    }
+    forall(const vertex &v, S)
+      v->vel += Dt * (v->force - (Damp * v->vel));
   }
-  */
+  
+  void RungeKhutta4()
+  {
+    vertex n1;
+    Vec3f a,b,c,d;
+    float phi;
+
+    findForces();
+    //k0
+    forall(const vertex &v, S){
+      v->RK4[0] = Dt * (v->force - (Damp * v->vel));
+      v->RK4[1] = Dt * v->vel;
+    }
+    //k1
+    forall(const vertex &v, S){
+      n1 = S.anyIn(v);
+      forall(const vertex &n2, S.neighbors(v)){
+	if(n2!=n1){
+	    c = S.target(S.edge(v,n1))->pos + .5*S.target(S.edge(v,n1))->RK4[1];
+	    d = S.source(S.edge(v,n1))->pos + .5*S.source(S.edge(v,n1))->RK4[1];
+	    a = normalized(c-d);
+	    c = S.target(S.edge(v,n2))->pos + .5*S.target(S.edge(v,n2))->RK4[1];
+	    d = S.source(S.edge(v,n2))->pos + .5*S.source(S.edge(v,n2))->RK4[1];
+	    b = normalized(c-d);
+	    phi = angle(a, b);
+	    // here ^ is cross product
+	    n1->RK4[2] += normalized(a ^ (a ^ b)) * KB * phi * Dt;
+	    n2->RK4[2] += normalized((a ^ b) ^ b) * KB * phi * Dt;
+	  }
+	a = n2->pos + .5*n2->RK4[1];
+	b = v->pos + .5*v->RK4[1];
+	v->RK4[2] += normalized(a - b) * (norm(a - b) - S.edge(v, n2)->restlen) * KR * Dt;
+	v->RK4[2] -= Damp * (v->vel + .5*v->RK4[0])*Dt;
+      }
+    }
+    forall(const vertex &v, S)
+      v->RK4[3] = Dt * (v->vel + .5*v->RK4[0]);
+    //k2
+    forall(const vertex &v, S){
+      n1 = S.anyIn(v);
+      forall(const vertex &n2, S.neighbors(v)){
+	if(n2!=n1){
+	    c = S.target(S.edge(v,n1))->pos + .5*S.target(S.edge(v,n1))->RK4[3];
+	    d = S.source(S.edge(v,n1))->pos + .5*S.source(S.edge(v,n1))->RK4[3];
+	    a = normalized(c-d);
+	    c = S.target(S.edge(v,n2))->pos + .5*S.target(S.edge(v,n2))->RK4[3];
+	    d = S.source(S.edge(v,n2))->pos + .5*S.source(S.edge(v,n2))->RK4[3];
+	    b = normalized(c-d);
+	    phi = angle(a, b);
+	    // here ^ is cross product
+	    n1->RK4[4] += normalized(a ^ (a ^ b)) * KB * phi * Dt;
+	    n2->RK4[4] += normalized((a ^ b) ^ b) * KB * phi * Dt;
+	  }
+	a = n2->pos + .5*n2->RK4[3];
+	b = v->pos + .5*v->RK4[3];
+	v->RK4[4] += normalized(a - b) * (norm(a - b) - S.edge(v, n2)->restlen) * KR * Dt;
+	v->RK4[4] -= Damp * (v->vel + .5*v->RK4[2])*Dt;
+      }
+    }
+    forall(const vertex &v, S)
+      v->RK4[5] = Dt * (v->vel + .5*v->RK4[2]);
+   //k3
+    forall(const vertex &v, S){
+      n1 = S.anyIn(v);
+      forall(const vertex &n2, S.neighbors(v)){
+	if(n2!=n1){
+	    c = S.target(S.edge(v,n1))->pos + S.target(S.edge(v,n1))->RK4[3];
+	    d = S.source(S.edge(v,n1))->pos + S.source(S.edge(v,n1))->RK4[3];
+	    a = normalized(c-d);
+	    c = S.target(S.edge(v,n2))->pos + S.target(S.edge(v,n2))->RK4[3];
+	    d = S.source(S.edge(v,n2))->pos + S.source(S.edge(v,n2))->RK4[3];
+	    b = normalized(c-d);
+	    phi = angle(a, b);
+	    // here ^ is cross product
+	    n1->RK4[6] += normalized(a ^ (a ^ b)) * KB * phi * Dt;
+	    n2->RK4[6] += normalized((a ^ b) ^ b) * KB * phi * Dt;
+	  }
+	a = n2->pos + n2->RK4[5];
+	b = v->pos + v->RK4[5];
+	v->RK4[6] += normalized(a - b) * (norm(a - b) - S.edge(v, n2)->restlen) * KR * Dt;
+	v->RK4[6] -= Damp * (v->vel + v->RK4[4])*Dt;
+      }
+    }
+    forall(const vertex &v, S)
+      v->RK4[7] = Dt * (v->vel + v->RK4[4]); 
+  //final step of Runge-Kutta
+    forall(const vertex &v, S){
+      v->vel += (v->RK4[0]+2*v->RK4[2]+2*v->RK4[4]+v->RK4[6])/6;
+      v->pos += (v->RK4[1]+2*v->RK4[3]+2*v->RK4[5]+v->RK4[7])/6;
+    }
+      steps++;
+      timing += Dt;
+  }
+  
   void movePoints()
   {
     forall(const vertex &v, S) 
