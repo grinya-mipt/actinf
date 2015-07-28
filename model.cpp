@@ -44,11 +44,10 @@ class EdgeData
 {
 public:
   float restlen;				// rest length of springs
-  bool draw;
-  Vec3f dir;              
+  bool draw;             
 
   // Constructor, set initial values
-  EdgeData(): restlen(0), draw(false), dir(0,0,0) {}
+  EdgeData(): restlen(0), draw(false) {}
 };
 
 // Type of the VV graph
@@ -156,15 +155,20 @@ public:
     srand(SeedRandom==0?time(0):SeedRandom);
 
     
-    Vec3f r1,r2;
+    Vec3f r,r1,r2;
+
     for(int i=0;i<1;i++) // SPECIFY NUMBER OF Filaments
       {
-	r1=Vec3f(unifRand(.0, 2.) * BoxSize[0],unifRand(.0, 2.) * BoxSize[1],unifRand(.0, 2.) * BoxSize[2]) * CellSize;
-	r2=Vec3f(unifRand(.0, 2.) * BoxSize[0],unifRand(.0, 2.) * BoxSize[1],unifRand(.0, 2.) * BoxSize[2]) * CellSize;
+	//r1=Vec3f(unifRand(.0, 2.) * BoxSize[0],unifRand(.0, 2.) * BoxSize[1],unifRand(.0, 2.) * BoxSize[2]) * CellSize;
+	//r2=Vec3f(unifRand(.0, 2.) * BoxSize[0],unifRand(.0, 2.) * BoxSize[1],unifRand(.0, 2.) * BoxSize[2]) * CellSize;
+	r1 = Vec3f(0.,1.,0.);
+	r2 = Vec3f(-1.,-1.,0.);
+        RestLenght = norm(r1-r2);
 	createFilament(r1,r2,RestLenght);
       }
-      
-    growFilament(Vec3f(unifRand(.0, 2.) * BoxSize[0],unifRand(.0, 2.) * BoxSize[1],unifRand(.0, 2.) * BoxSize[2]) * CellSize, RestLenght);
+    //r = Vec3f(unifRand(.0, 2.) * BoxSize[0],unifRand(.0, 2.) * BoxSize[1],unifRand(.0, 2.) * BoxSize[2]) * CellSize; 
+    r = Vec3f(1.,-1.,0.);
+    growFilament(r, RestLenght);
 						
     timing = 0;
     steps = 0;
@@ -216,23 +220,33 @@ public:
   void findTorques()
   {
     vertex n1;
-    Vec3f tmp;
+    Vec3f a,b;
     float phi; 
     forall(const vertex &v, S)
     {
       n1 = S.anyIn(v);
       forall(const vertex &n2, S.neighbors(v)){
 	  if(n2!=n1){
-	    phi = angle(S.edge(v,n1)->dir, S.edge(v,n2)->dir);
+	    a = normalized(S.target(S.edge(v,n1))->pos-S.source(S.edge(v,n1))->pos);
+	    b = normalized(S.target(S.edge(v,n2))->pos-S.source(S.edge(v,n2))->pos);
+	    phi = angle(a, b);
 	    // here ^ is cross product
-	    tmp = S.edge(v,n1)->dir ^ S.edge(v,n2)->dir;
-	    n1->force += normalized(S.edge(v,n1)->dir ^ tmp) * KB * phi;
-	    n2->force += normalized(tmp ^ S.edge(v,n2)->dir) * KB * phi;
+	    n1->force += normalized(a ^ (a ^ b)) * KB * phi;
+	    n2->force += normalized((a ^ b) ^ b) * KB * phi;
 	  }
 	}
     }
   }
-  
+  /*
+  void findTorquesImplicit(float h, float alpha)
+  {
+    forall(const vertex &v, S) 
+    {
+      v->vel += h * (v->force - (Damp * v->vel));
+      v->pos += h * v->vel; 
+    }
+  }
+  */
   void movePoints()
   {
     forall(const vertex &v, S) 
@@ -291,16 +305,8 @@ public:
     w->pos.x() = r2.x();
     w->pos.y() = r2.y();
     w->pos.z() = r2.z();
-    w->draw = true;
-      
-    S.insertEdge(v, w);
-    S.edge(v, w)->draw = true;
-    S.edge(v, w)->restlen = restlen;
-    S.edge(v, w)->dir = normalized(v->pos-w->pos);      
-    S.insertEdge(w, v);
-    S.edge(w, v)->draw = true;
-    S.edge(w, v)->restlen = restlen;
-    S.edge(w, v)->dir = - S.edge(v, w)->dir;
+    w->draw = true;      
+    insertSpring(v,w,restlen);
   }
   
   void growFilament(Vec3f r,float restlen)
@@ -315,14 +321,7 @@ public:
 	v->pos.y() = r.y();
 	v->pos.z() = r.z();
 	v->draw = true;
-	S.insertEdge(v,w);
-	S.edge(v, w)->draw = true;
-	S.edge(v, w)->restlen = restlen;
-	S.edge(v, w)->dir = normalized(v->pos-w->pos);
-	S.insertEdge(w,v);
-	S.edge(w, v)->draw = true;
-	S.edge(w, v)->restlen = restlen;
-	S.edge(w, v)->dir = - S.edge(v, w)->dir;
+	insertSpring(v,w,restlen);
 	growthrate++;
       }
   }
@@ -331,12 +330,10 @@ public:
   {
     S.insertEdge(v, w);
     S.edge(v, w)->draw = true;
-    S.edge(v, w)->restlen = restlen;
-    S.edge(v, w)->dir = normalized(v->pos-w->pos);      
+    S.edge(v, w)->restlen = restlen;     
     S.insertEdge(w, v);
     S.edge(w, v)->draw = true;
     S.edge(w, v)->restlen = restlen;
-    S.edge(w, v)->dir = - S.edge(v, w)->dir;
   }
 	
   float unifRand(float mean, float width)

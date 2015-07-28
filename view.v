@@ -1,5 +1,5 @@
 [Main]
-Dt: .002				// Timestep
+Dt: .0002				// Timestep
 BoxSize: 2 2 2				// Size of box
 CellSize: 1				// Cell size
 WireFrame: true			// Draw wireframe or shaded
