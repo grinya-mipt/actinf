@@ -32,23 +32,30 @@ public:
   Vec3f pos;					// postition
   Vec3f vel;					// velocity
   Vec3f force;					// Uniform force on points
-  //Vec3f nrml;					// Normal vector
 
-  //int edges;					// Number of edges the vertex is on
-  //int face;					// Which face vertex is on
-  bool border1;
-  bool border2;					
+  Vec3f RK4 [8];                                 //Data for Runge-Khutta method     
+
+  bool barb;					// barbed or pointed end
   bool draw;					// Draw vertex
 
   // Constructor, set initial values
-  VertexData() : pos(0,0,0), vel(0,0,0), force(0,0,0), border1(false), border2(false), draw(false) {}
+  VertexData() : pos(0,0,0), vel(0,0,0), force(0,0,0), barb(false), draw(false) {
+		    RK4[0]=Vec3f(0,0,0);
+		    RK4[1]=Vec3f(0,0,0);
+		    RK4[2]=Vec3f(0,0,0);
+		    RK4[3]=Vec3f(0,0,0);
+		    RK4[4]=Vec3f(0,0,0);
+		    RK4[5]=Vec3f(0,0,0);
+		    RK4[6]=Vec3f(0,0,0);
+		    RK4[7]=Vec3f(0,0,0);
+		    }
 };
 
 class EdgeData
 {
 public:
   float restlen;				// rest length of springs
-  bool draw;              
+  bool draw;             
 
   // Constructor, set initial values
   EdgeData(): restlen(0), draw(false) {}
@@ -71,7 +78,8 @@ class myModel : public Model
 {
 public:
   // Parameters
-  float Dt;					// Timestep
+  bool Debug;
+  float Dt;					// timingstep
   //Vec3i CubeSize;				// Size of cube
   Vec3f BoxSize;				// Size of box
   float CellSize;				// Size of cells
@@ -82,14 +90,17 @@ public:
   float FrameSteps;				// Steps per frame
   bool PrintStats;				// Print out stats
   bool Parallel;				// Use Cuda
-  int SeedRandom;        // Seed for random numbers
+  int SeedRandom;        			// Seed for random numbers
+  int TimeSolver;
 
   float KR;					// Regular spring constant
+  float KB;
   float Damp;					// Spring dampening
   bool PrintForce;				// Print out force vectors
   float Gravity;				// Gravity strength
   float Friction;				// Friction when cube hits wall
   float Threshold;				// Threshold velocity under which vertices on surface don't move
+  float RestLenght;			
 
 private:
   // Model variables
@@ -100,7 +111,7 @@ private:
   util::Materials materials;			// Materials
 
   int steps;					// Step count
-  float time;					// Time counter
+  float timing;					// timing counter
   Vec3f gravity;				// Gravity vector
 
   DNObjT nhbd;					// Distributed objects
@@ -114,6 +125,7 @@ public:
   {
     util::Parms parms("view.v");
 
+    parms("Main", "Debug", Debug);
     parms("Main", "Dt", Dt);
     parms("Main", "CellSize", CellSize);
     parms("Main", "BoxSize", BoxSize);
@@ -125,14 +137,16 @@ public:
     parms("Main", "PrintStats", PrintStats);
     parms("Main", "Parallel", Parallel);
     parms("Main", "SeedRandom", SeedRandom);
-
-
+    parms("Main", "TimeSolver", TimeSolver);
+    
     parms("Spring", "KR", KR);
+    parms("Spring", "KB", KB);
     parms("Spring", "Damp", Damp);
     parms("Spring", "PrintForce", PrintForce);
     parms("Spring", "Gravity", Gravity);
     parms("Spring", "Friction", Friction);
     parms("Spring", "Thresold", Threshold);
+    parms("Spring", "RestLenght", RestLenght);
   }
 
   // Here, reread the files when they are modified
@@ -153,14 +167,27 @@ public:
   {
     // Read the parameters
     readParms();
-    //srand(SeedRandom==0?time(NULL):SeedRandom);
+    srand(SeedRandom==0?time(0):SeedRandom);
 
-    createRandomFilament( unifRand(.0, 2.) * BoxSize[0]  * CellSize,	unifRand(.0, 2.) * BoxSize[0]  * CellSize, 
-						  unifRand(.0, 2.) * BoxSize[1]  * CellSize,	unifRand(.0, 2.) * BoxSize[1]  * CellSize,
-						   -(double)BoxSize[2]*CellSize											,	(double)BoxSize[2]*CellSize);
+    
+    Vec3f r,r1,r2;
 
-	cout << "Hey" << endl;
-    time = 0;
+    for(int i=0;i<1;i++) // SPECIFY NUMBER OF Filaments
+      {
+	//r1=Vec3f(unifRand(.0, 2.) * BoxSize[0],unifRand(.0, 2.) * BoxSize[1],unifRand(.0, 2.) * BoxSize[2]) * CellSize;
+	//r2=Vec3f(unifRand(.0, 2.) * BoxSize[0],unifRand(.0, 2.) * BoxSize[1],unifRand(.0, 2.) * BoxSize[2]) * CellSize;
+	r1 = Vec3f(0.,1.,0.);
+	r2 = Vec3f(-1.,-1.,0.);
+        RestLenght = norm(r1-r2);
+	createFilament(r1,r2,RestLenght);
+      }
+    //r = Vec3f(unifRand(.0, 2.) * BoxSize[0],unifRand(.0, 2.) * BoxSize[1],unifRand(.0, 2.) * BoxSize[2]) * CellSize; 
+    r = Vec3f(1.,-1.,0.);
+    growFilament(r, RestLenght);
+    //if(isnan(angleSafe(Vec3f(0.,1.,0.),Vec3f(0.,-1.,0.)))) cout << "found NaN: =|" << endl; 
+    cout.precision(15);
+
+    timing = 0;
     steps = 0;
 
     nhbd.allocCopyToDevice();
@@ -174,9 +201,6 @@ public:
 
   void step()
   {	
-	if(time<100000) createRandomFilament( unifRand(.0, 2.) * BoxSize[0]  * CellSize,	unifRand(.0, 2.) * BoxSize[0]  * CellSize, 
-									  unifRand(.0, 2.) * BoxSize[1]  * CellSize,	unifRand(.0, 2.) * BoxSize[1]  * CellSize,
-									  -(double)BoxSize[2]*CellSize											,	(double)BoxSize[2]*CellSize);	 
 
     if(Parallel) {
       // Call cuda to do the work
@@ -184,34 +208,248 @@ public:
       // Get data back from cuda
       pos.copyToHost();
 
-      // Update time
+      // Update timing
       steps += FrameSteps;
-      time += Dt * FrameSteps;
+      timing += Dt * FrameSteps;
     } else {
       for(int i = 0; i < FrameSteps; i++) {
-        // Find force on vertivces
-        forall(const vertex &v, S)
-		  v->force=Vec3f(0,0,0);
-        forall(const vertex &v, S) {  
-          if (v->border1) v->force.set(0.,0.,std::max(0.,(double)(1000-time)/1000));
+        if(TimeSolver==0){
+          findForces();       
+	        movePoints();
+	      }else if(TimeSolver==1)
+	        RungeKhutta4();
+      checkCenterOfMassDynamics();
+	    }
+	        
+    }
+	  forall(const vertex &v, S){
+	    if(Debug)
+        cout << "step(): " << v->pos << " " << v->vel << " " << v->force << endl;
+      
+      if(isnan(v->pos[0])){
+        cout << "found NaN: stop simulation" << endl;
+        stop();
+      }
+    }
 
-           // Force in walls
-          forall(const vertex &n, S.neighbors(v)) {
-            // Spring forces
-            Vec3f dir = n->pos - v->pos;
-            float len = norm(dir);
-            dir /= len;
-            v->force += dir * (len - S.edge(v, n)->restlen) * KR;
-          }
-        }
+    if(PrintStats && !(steps % 100))
+      cout << "Explicit step. Steps: " << steps << ". timing: " << timing << endl;
+  }
+  
+  void findForces()
+  {
+    forall(const vertex &v, S) v->force=Vec3f(0,0,0);
+    vertex n1;
+    Vec3f a,b,c,d;
+    float phi; 
+    forall(const vertex &v, S)
+    {
+      n1 = S.anyIn(v);
+      forall(const vertex &n2, S.neighbors(v)){
+	      if(n2!=n1){
+	        c = S.target(S.edge(v,n1))->pos;
+	        d = S.source(S.edge(v,n1))->pos;
+	        a = normalizedSafe(c-d);
+	        c = S.target(S.edge(v,n2))->pos;
+	        d = S.source(S.edge(v,n2))->pos;
+	        b = normalizedSafe(c-d);
+	        phi = angleSafe(a, b);
+		if(isnan(phi)) cout << "found NaN: findForces()" << endl; 
+	        if(Debug)
+	          cout << "abcd: " << a << " " << b << " " << c << " " << d << ". angle: " << phi << endl;
+	        // here ^ is cross product
+	        n1->force += normalizedSafe(a ^ (a ^ b)) * KB * phi;
+	        n2->force += normalizedSafe((a ^ b) ^ b) * KB * phi;
+	      }
+	      a = n2->pos;
+	      b = v->pos;
+	      v->force += normalizedSafe(a - b) * (norm(a - b) - S.edge(v, n2)->restlen) * KR;
+      }
+    }
+    forall(const vertex &v, S)
+      if(Debug)
+        cout << "findForces(): " << v->pos << " " << v->vel << " " << v->force << endl;
+  }
+
+  void findVel()
+  {
+    forall(const vertex &v, S)
+      v->vel += Dt * (v->force - (Damp * v->vel));
+  }
+  
+  void RungeKhutta4()
+  {
+    vertex n1;
+    Vec3f a,b,c,d;
+    float phi;
+    
+    forall(const vertex &v, S)
+	for(int i=0;i<8;i++) v->RK4[i]=Vec3f(0,0,0);
+
         
-        forall(const vertex &v, S) {  
-          // Move points
-          if(!v->border2){
-            v->vel += Dt * (v->force - (Damp * v->vel));
-            v->pos += Dt * v->vel;
-		  }
+    findForces();
+    //k0
+    forall(const vertex &v, S){
+      v->RK4[0] = Dt * (v->force - (Damp * v->vel));
+      v->RK4[1] = Dt * v->vel;
+      
+      if(Debug)
+        cout << "rk start: " << v->pos << " " << v->vel << " " << v->force << endl;
+    }
+    
+          
+    //k1
+    forall(const vertex &v, S){
+      n1 = S.anyIn(v);
+      forall(const vertex &n2, S.neighbors(v)){
+	      if(n2!=n1){
+	        c = S.target(S.edge(v,n1))->pos + .5*S.target(S.edge(v,n1))->RK4[1];
+	        d = S.source(S.edge(v,n1))->pos + .5*S.source(S.edge(v,n1))->RK4[1];
+	        a = normalizedSafe(c-d);
+	        c = S.target(S.edge(v,n2))->pos + .5*S.target(S.edge(v,n2))->RK4[1];
+	        d = S.source(S.edge(v,n2))->pos + .5*S.source(S.edge(v,n2))->RK4[1];
+	        b = normalizedSafe(c-d);
+	        phi = angleSafe(a, b);
+		//cout << phi << endl;
+		if(isnan(phi)) cout << "found NaN: RungeKhutta4() k1" << endl; 
+	        // here ^ is cross product
+	        n1->RK4[2] += normalizedSafe(a ^ (a ^ b)) * KB * phi * Dt;
+	        n2->RK4[2] += normalizedSafe((a ^ b) ^ b) * KB * phi * Dt;
+	      }
+	      a = n2->pos + .5*n2->RK4[1];
+	      b = v->pos + .5*v->RK4[1];
+	      v->RK4[2] += normalizedSafe(a - b) * (norm(a - b) - S.edge(v, n2)->restlen) * KR * Dt;
+	      v->RK4[2] -= Damp * (v->vel + .5*v->RK4[0])*Dt;
+      }
+      if(Debug)
+        cout << "rk4[2]: " << v->pos << " " << v->RK4[2] << endl;
+    }
+    forall(const vertex &v, S){
+      v->RK4[3] = Dt * (v->vel + .5*v->RK4[0]);
+      if(Debug)
+        cout << "rk4[3]: " << v->pos << " " << v->RK4[3] << endl;
+    }
+    //k2
+    forall(const vertex &v, S){
+      n1 = S.anyIn(v);
+      forall(const vertex &n2, S.neighbors(v)){
+	if(n2!=n1){
+	    c = S.target(S.edge(v,n1))->pos + .5*S.target(S.edge(v,n1))->RK4[3];
+	    d = S.source(S.edge(v,n1))->pos + .5*S.source(S.edge(v,n1))->RK4[3];
+	    a = normalizedSafe(c-d);
+	    c = S.target(S.edge(v,n2))->pos + .5*S.target(S.edge(v,n2))->RK4[3];
+	    d = S.source(S.edge(v,n2))->pos + .5*S.source(S.edge(v,n2))->RK4[3];
+	    b = normalizedSafe(c-d);
+	    phi = angleSafe(a, b);
+	    if(isnan(phi)) cout << "found NaN: RungeKhutta4() k2" << endl; 
+	    // here ^ is cross product
+	    n1->RK4[4] += normalizedSafe(a ^ (a ^ b)) * KB * phi * Dt;
+	    n2->RK4[4] += normalizedSafe((a ^ b) ^ b) * KB * phi * Dt;
+	  }
+	a = n2->pos + .5*n2->RK4[3];
+	b = v->pos + .5*v->RK4[3];
+	v->RK4[4] += normalizedSafe(a - b) * (norm(a - b) - S.edge(v, n2)->restlen) * KR * Dt;
+	v->RK4[4] -= Damp * (v->vel + .5*v->RK4[2])*Dt;
+      }
+      if(Debug)
+        cout << "rk4[4]: " << v->pos << " " << v->RK4[4] << endl;
+    }
+    forall(const vertex &v, S){
+      v->RK4[5] = Dt * (v->vel + .5*v->RK4[2]);
+      if(Debug)
+        cout << "rk4[5]: " << v->pos << " " << v->RK4[5] << endl;
+    }
+   //k3
+    forall(const vertex &v, S){
+      if(Debug)
+        cout << "rk4[4]: " << v->pos << " " << v->RK4[4] << endl;
+      n1 = S.anyIn(v);
+      forall(const vertex &n2, S.neighbors(v)){
+            if(Debug)
+        cout << "rk4[4]: " << v->pos << " " << v->RK4[4] << endl;
+	    if(n2!=n1){
+	    c = S.target(S.edge(v,n1))->pos + S.target(S.edge(v,n1))->RK4[3];
+	    d = S.source(S.edge(v,n1))->pos + S.source(S.edge(v,n1))->RK4[3];
+	    a = normalizedSafe(c-d);
+	    c = S.target(S.edge(v,n2))->pos + S.target(S.edge(v,n2))->RK4[3];
+	    d = S.source(S.edge(v,n2))->pos + S.source(S.edge(v,n2))->RK4[3];
+	    b = normalizedSafe(c-d);
+	    phi = angleSafe(a, b);
+	    if(isnan(phi)) cout << "found NaN: RungeKhutta4() k3" << endl; 
+	    if(Debug)
+	      cout << "rk6,abcd: " << a << " " << b << " " << c << " " << d << ". angle: " << phi << endl;
+	    // here ^ is cross product
+	    n1->RK4[6] += normalizedSafe(a ^ (a ^ b)) * KB * phi * Dt;
+	    n2->RK4[6] += normalizedSafe((a ^ b) ^ b) * KB * phi * Dt;
+	    if(Debug)
+	      cout << "rk6,angularF: " << normalizedSafe(a ^ (a ^ b)) * KB * phi * Dt << " " << normalizedSafe((a ^ b) ^ b) * KB * phi * Dt << endl;
+	  }
+	a = n2->pos + n2->RK4[5];
+	b = v->pos + v->RK4[5];
+	v->RK4[6] += normalizedSafe(a - b) * (norm(a - b) - S.edge(v, n2)->restlen) * KR * Dt;
+	v->RK4[6] -= Damp * (v->vel + v->RK4[4])*Dt;
+	      if(Debug){
+	        cout << "rk6,step: " << normalizedSafe(a - b) * (norm(a - b) - S.edge(v, n2)->restlen) * KR * Dt << " " << Damp * (v->vel + v->RK4[4])*Dt << endl;
+	        cout << "why?!: " << Damp << " " << v->vel << " " << v->RK4[4] << " " << Dt << endl;
+	      }
+	      
+      }
+      if(Debug)
+        cout << "rk4[6]: " << v->pos << " " << v->RK4[6] << endl;
+    }
+    
+    forall(const vertex &v, S)
+      v->RK4[7] = Dt * (v->vel + v->RK4[4]); 
+      
+  //final step of Runge-Kutta
+    forall(const vertex &v, S){
+      v->vel += (v->RK4[0]+2*v->RK4[2]+2*v->RK4[4]+v->RK4[6])/6;
+      v->pos += (v->RK4[1]+2*v->RK4[3]+2*v->RK4[5]+v->RK4[7])/6;
+      if(Debug)
+        cout << "rk8(): " << v->pos << " " << v->vel << " " << v->force << endl;
+    }
+      steps++;
+      timing += Dt;
+  }
+  
+  float angleSafe( Vec3f v1, Vec3f v2 )
+  {
+    float x = v1*v2;
+    float y = norm( v1^v2 );
+  	if(y==0.) return 0.;
+	else if(x==0.)  return M_PI/2;
+			else if(isnan(atan2( y, x ))) return 0.;
+			      else return atan2( y, x );
+  }
+  
+  Vec3f normalizedSafe(Vec3f a)
+  {
+    float tmp = a.x()*a.x()+a.y()*a.y()+a.z()*a.z();
+    if(tmp<0) tmp = 0;
+    if(tmp == 0) return Vec3f(0.,0.,0.);
+    else return(a=a/sqrt(tmp));
+  }
+  
+  void checkCenterOfMassDynamics()
+  {
+    Vec3f force=Vec3f(0.,0.,0.), pos=Vec3f(0.,0.,0.);
+    forall(const vertex &v, S){
+      force+=v->force;
+      pos+=v->pos/3;
+    }
+    cout << force << " " << pos << endl;
+  }
+  
+  void movePoints()
+  {
+    forall(const vertex &v, S) 
+    {
+      if(Debug)
+        cout << "movePoints(): " << v->pos << " " << v->vel << " " << v->force << endl;
+      v->vel += Dt * (v->force - (Damp * v->vel));
+      v->pos += Dt * v->vel;       
           // Hit the box
+	  /*
           if(v->pos.x() > BoxSize.x()) {
             v->pos.x() = BoxSize.x();
             v->vel -= Dt * v->vel * Friction * v->vel.x() * v->vel.x();
@@ -231,7 +469,7 @@ public:
             v->pos.y() = -BoxSize.y();
             v->vel -= Dt * v->vel * Friction * v->vel.y() * v->vel.y();
             v->vel.y() = 0;
-          }/*
+          }
           if(v->pos.z() > BoxSize.z()) {
             v->pos.z() = BoxSize.z();
             v->vel -= Dt * v->vel * Friction * v->vel.z() * v->vel.z();
@@ -243,44 +481,60 @@ public:
             v->vel.z() = 0;
           }*/
 
-          steps++;
-          time += Dt;
-	   }
-      }
-    }
-
-    if(PrintStats && !(steps % 100))
-      cout << "Explicit step. Steps: " << steps << ". Time: " << time << endl;
+      steps++;
+      timing += Dt;
+      
+    }	    
   }
   
-   void createRandomFilament(double x1,double x2,double y1,double y2,double z1,double z2){
-	  vertex v;
-      S.insert(v);
-      v->pos.x() = x1;
-      v->pos.y() = y1;
-      v->pos.z() = z1;
-      v->draw = true;
-      v->border1 = true;
-	 
-	 vertex w;
-      S.insert(w);
-	  w->pos.x() = x2;
-      w->pos.y() = y2;
-      w->pos.z() = z2;
-      w->draw = true;
-      w->border2 = true;
-      
-      S.insertEdge(v, w);
-      S.edge(v, w)->draw = true;
-      S.edge(v, w)->restlen = 1;//norm(w->pos - v->pos);
-      
-      S.insertEdge(w, v);
-      S.edge(w, v)->draw = true;
-      S.edge(w, v)->restlen = 1;//norm(w->pos - v->pos);
-	}
+  void createFilament(Vec3f r1, Vec3f r2, float restlen)
+  {
+    vertex v;
+    S.insert(v);
+    v->pos.x() = r1.x();
+    v->pos.y() = r1.y();
+    v->pos.z() = r1.z();
+    v->draw = true;
+    v->barb = true;
+    vertex w;
+    S.insert(w);
+    w->pos.x() = r2.x();
+    w->pos.y() = r2.y();
+    w->pos.z() = r2.z();
+    w->draw = true;      
+    insertSpring(v,w,restlen);
+  }
+  
+  void growFilament(Vec3f r,float restlen)
+  {
+    int growthrate = 0;
+    vertex n = S.any();
+    forall(const vertex &w, S.neighbors(n))
+      if(S.valence(w) == 1 && growthrate < 1) {
+	vertex v;
+	S.insert(v);
+	v->pos.x() = r.x();
+	v->pos.y() = r.y();
+	v->pos.z() = r.z();
+	v->draw = true;
+	insertSpring(v,w,restlen);
+	growthrate++;
+      }
+  }
+  
+  void insertSpring(vertex v, vertex w, float restlen)
+  {
+    S.insertEdge(v, w);
+    S.edge(v, w)->draw = true;
+    S.edge(v, w)->restlen = restlen;     
+    S.insertEdge(w, v);
+    S.edge(w, v)->draw = true;
+    S.edge(w, v)->restlen = restlen;
+  }
 	
-	double unifRand(double mean, double width) { 
-    return(mean + (double(rand())/double(RAND_MAX) - 0.5) * width); 
+  float unifRand(float mean, float width)
+  { 
+    return(mean + (float(rand())/float(RAND_MAX) - 0.5) * width); 
   }
 
   // Initialize drawing
