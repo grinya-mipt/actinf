@@ -42,7 +42,7 @@ struct movePointsOP
   __device__
     void operator()(const int vtx) const 
     { 
-      vel[vtx] += dt * (force[vtx] - (damp * vel[vtx]));
+      vel[vtx] += force[vtx] / damp;
       pos[vtx] += dt * vel[vtx];
 
       for(int i = 0; i < 3; i ++) {
@@ -50,20 +50,12 @@ struct movePointsOP
           pos[vtx] -= vel[vtx] * dt;
           pos[vtx][i] = box[0][i];
           vel[vtx][i] = 0;
-          if(norm(vel[vtx]) < threshold)
-            vel[vtx] = 0;
-          else
-            vel[vtx] -= dt * friction * vel[vtx];
           pos[vtx] += dt * vel[vtx];
         }
         if(pos[vtx][i] < -box[0][i]) {
           pos[vtx] -= dt * vel[vtx];
           pos[vtx][i] = -box[0][i];
           vel[vtx][i] = 0;
-          if(norm(vel[vtx]) < threshold)
-            vel[vtx] = 0;
-          else
-            vel[vtx] -= dt * friction * vel[vtx];
           pos[vtx] += dt * vel[vtx];
         }
       }
@@ -74,13 +66,13 @@ struct movePointsOP
 // Find forces
 struct findForcesOP
 {
-  Vec3f *pos, *force, *gravity;
+  Vec3f *pos, *force;
   float *restlen, kr, dt;
   unsigned int *nbhd, nbs;
 
 
   findForcesOP(unsigned int *_nbhd, Vec3f *_pos, Vec3f *_force, float *_restlen, Vec3f *_gravity, float _kr, float _dt, unsigned int _nbs) : 
-    nbhd(_nbhd), pos(_pos), force(_force), restlen(_restlen), gravity(_gravity),  kr(_kr), dt(_dt), nbs(_nbs) {}
+    nbhd(_nbhd), pos(_pos), force(_force), restlen(_restlen), kr(_kr), dt(_dt), nbs(_nbs) {}
 
   __device__
     void operator()(const int vtx) const 
@@ -88,10 +80,6 @@ struct findForcesOP
       unsigned int edg = vtx * nbs;
       Vec3f dir;
 
-      // Start with gravity
-      force[vtx] = *gravity;
-
-      // Force in walls
       for(unsigned int i = 0; i < nbs; i++, edg++)
         if(nbhd[edg] != vtx) {
           dir = pos[nbhd[edg]] - pos[vtx];
@@ -99,6 +87,7 @@ struct findForcesOP
           dir /= len;
           force[vtx] += dir * (len - restlen[edg]) * kr;
         }
+
       return;
     }
 };
@@ -265,13 +254,11 @@ extern "C" {
   }
 
   int massSpring(unsigned int nb, unsigned int pos, unsigned int vel, unsigned int force, unsigned int restlen, 
-      float *box, float *gravity, float kr, float damp, float friction, float threshold, float dt, unsigned int steps)
+      float *box, float kr, float damp, float friction, float threshold, float dt, unsigned int steps)
   {
     if(nb > maxn || !Nhbd[nb] || pos > maxn || !VData[pos] || vel > maxn || !VData[vel] || force > maxn || !VData[force]) 
       return(1);
 
-    DVecF TGravity(gravity, gravity + 3);
-    Vec3f *Gravity = (Vec3f *)(&TGravity[0]).get();
     DVecF TBox(box, box + 3);
     Vec3f *Box = (Vec3f *)(&TBox[0]).get();
     Vec3f *Pos = (Vec3f *)(&(*VData[pos])[0]).get();
