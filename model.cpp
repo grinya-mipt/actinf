@@ -9,6 +9,7 @@
 #include <util/palette.h>
 #include <util/materials.h>
 #include <iostream>
+#include <fstream>
 #include <iomanip>
 #include <iterator> 
 #include <map>
@@ -135,6 +136,7 @@ public:
   int TimeSolver;
   int N;						
   bool showhashinfo;
+  bool Constraints;
 
   float kStretchActin;				
   float kBendActin;
@@ -154,6 +156,8 @@ public:
   float DampF;
   float VarianceF;
 
+  QString OutputNumericsFileName;
+
 private:
   // Model variables
   vvgraph S;					// S = Actin Network 
@@ -162,6 +166,7 @@ private:
   std::list<HashData> hash;
   util::Palette palette;			// Colors
   util::Materials materials;			// Materials
+
 
   int steps;					// Step count
   float timing;					// timing counter
@@ -194,6 +199,7 @@ public:
     parms("Main", "TimeSolver", TimeSolver);
     parms("Main", "HashSize", N);
     parms("Main", "ShowHashInfo", showhashinfo);
+    parms("Main", "Constraints", Constraints);
 
     parms("Actin", "kStretchActin", kStretchActin);
     parms("Actin", "kBendActin", kBendActin);
@@ -212,6 +218,8 @@ public:
     parms("Filamin", "RestLenghtFilamin", RestLenghtFilamin);
     parms("Filamin", "Damp", DampF);
     parms("Filamin", "Variance", VarianceF);
+
+    parms("Output", "OutputNumericsFileName", OutputNumericsFileName);
 
   }
 
@@ -249,7 +257,11 @@ public:
     for(int i=0;i<Ngr;i++){
         growFilamentRandom_WLC(RestLenght);
     }
-    
+    /*
+    fstream myfile;
+    myfile.open("out.txt");
+    */
+
     createHash();
     updateHash();
     createFilaminsRandom(RestLenght*2);
@@ -282,13 +294,60 @@ public:
     } else {
       for(int i = 0; i < FrameSteps; i++) {
         if(TimeSolver==0) {
-          findForces();
-	  movePoints();
+          findForces_WLC();
+	  movePoints_WLC();
+	  deform();
+	  toFile();
           } else if (TimeSolver==1) RungeKutta4_WLC();
-	  updateHash();
+	  //updateHash();
       }
     if(PrintStats && !(steps % 100))
       cout << "Explicit step. Steps: " << steps << ". timing: " << timing << endl;
+    }
+  }
+
+  void deform()
+  {
+    float k;
+    float vel = BoxSize.x()*timing/20;
+    forall(const vertex &v, S){
+    k = v->pos.z()/BoxSize.x();
+    if(v->pos.x() > 0.95*BoxSize.x() + k*vel) {
+            if(v->force.x() > -Threshold) v->pos.x() = BoxSize.x() + k*vel;
+	    // v->vel -= Dt * v->vel * Friction * v->vel.x() * v->vel.x();
+	    // v->vel = Vec3f(0,0,0);
+	    v->vel.x() = 0;
+          }
+    if(v->pos.x() < -0.95*BoxSize.x() + k*vel) {
+            if(v->force.x() < Threshold) v->pos.x() = -BoxSize.x() + k*vel;
+            //v->vel -= Dt * v->vel * Friction * v->vel.x() * v->vel.x();
+            //v->vel = Vec3f(0,0,0);
+	   v->vel.x() = 0;
+          }
+    if(v->pos.y() > 0.98*BoxSize.y()) {
+            if(v->force.y() > -Threshold)  v->pos.y() = BoxSize.y();
+            //v->vel -= Dt * v->vel * Friction * v->vel.y() * v->vel.y();
+            //v->vel = Vec3f(0,0,0);
+	    v->vel.y() = 0;
+          }
+    if(v->pos.y() < -0.98*BoxSize.y()) {
+           if(v->force.y() < Threshold)  v->pos.y() = -BoxSize.y();
+           // v->vel -= Dt * v->vel * Friction * v->vel.y() * v->vel.y();
+           // v->vel = Vec3f(0,0,0);
+	   v->vel.y() = 0;
+          }
+    if(v->pos.z() > 0.98*BoxSize.z()) {
+            if(v->force.z() > -Threshold) v->pos.z() = BoxSize.z();
+            //v->vel -= Dt * v->vel * Friction * v->vel.z() * v->vel.z();
+            //v->vel = Vec3f(0,0,0);
+	    v->vel.z() = 0;
+          }
+    if(v->pos.z() < -0.98*BoxSize.z()) {
+           if(v->force.z() < Threshold) v->pos.z() = -BoxSize.z();
+            //v->vel -= Dt * v->vel * Friction * v->vel.z() * v->vel.z();
+            //v->vel = Vec3f(0,0,0);
+	    v->vel.z() = 0;
+          }
     }
   }
 
@@ -574,34 +633,24 @@ public:
       timing += Dt;
   }
 
-  float angleSafe( Vec3f v1, Vec3f v2 )
-  {
-    float x = v1*v2;
-    float y = norm( v1^v2 );
-        if(y==0.) return 0.;
-        else if(x==0.)  return M_PI/2;
-                        else if(isnan(atan2( y, x ))) return 0.;
-                              else return atan2( y, x );
-  }
-
-  Vec3f normalizedSafe(Vec3f a)
-  {
-    float tmp = a.x()*a.x()+a.y()*a.y()+a.z()*a.z();
-    if(tmp<0) tmp = 0;
-    if(tmp == 0) return Vec3f(0.,0.,0.);
-    else return(a=a/sqrt(tmp));
-  }
-
-  void movePoints()
+  void movePoints_WLC()
   {
     forall(const vertex &v, S)
     {
-      v->vel += Dt * (v->force - (DampA * v->vel));
+      addStochasticForce<vertex>(v,DampA,VarianceA);
+      v->vel = v->force / DampA;
       v->pos += Dt * v->vel;
-      constraints(v);
-      steps++;
-      timing += Dt;
+      //constraints<vertex>(v);
     }
+    forall(const filamin &v, F)
+    {
+      addStochasticForce<filamin>(v,DampF,VarianceF);
+      v->vel = v->force / DampF;
+      v->pos += Dt * v->vel;
+     //constraints<filamin>(v);
+    }
+    steps++;
+    timing += Dt;
   }
 
   void createFilament(Vec3f r1, Vec3f r2, float restlen, int i)
@@ -635,9 +684,9 @@ public:
     tmp = itb->vlist;
       //cout << *tmp.begin() << " " << *tmp.end() << endl;
     boo = 0;
-    for(std::list<vertex*>::iterator it1 = tmp.begin(); ((it1 != tmp.end()) && boo<10); ++it1){
+    for(std::list<vertex*>::iterator it1 = tmp.begin(); ((it1 != tmp.end()) && boo<1); ++it1){
       //cout << *it1 << endl;
-      for(std::list<vertex*>::iterator it2 = it1; ((it2 != tmp.end()) && boo<10); ++it2)
+      for(std::list<vertex*>::iterator it2 = it1; ((it2 != tmp.end()) && boo<1); ++it2)
 	{
 	  if((norm((**it1)->pos-(**it2)->pos) < restlen) && ((**it1)->n != (**it2)->n) && (it1 != it2)) {
 	    filamin f;
@@ -683,6 +732,8 @@ public:
       };
   }
 
+
+  //Tools
   void insertSpring(vertex v, vertex w, float restlen)
   {
     S.insertEdge(v, w);
@@ -693,7 +744,23 @@ public:
     S.edge(w, v)->restlen = restlen;
   }
 
+    float angleSafe( Vec3f v1, Vec3f v2 )
+  {
+    float x = v1*v2;
+    float y = norm( v1^v2 );
+        if(y==0.) return 0.;
+        else if(x==0.)  return M_PI/2;
+                        else if(isnan(atan2( y, x ))) return 0.;
+                              else return atan2( y, x );
+  }
 
+  Vec3f normalizedSafe(Vec3f a)
+  {
+    float tmp = a.x()*a.x()+a.y()*a.y()+a.z()*a.z();
+    if(tmp<0) tmp = 0;
+    if(tmp == 0) return Vec3f(0.,0.,0.);
+    else return(a=a/sqrt(tmp));
+  }
 
 
   float unifRand(float mean, float width)
@@ -703,42 +770,44 @@ public:
   template <typename T>
   void constraints(const T &v)
   {
+    if(Constraints){
     if(v->pos.x() > 0.99*BoxSize.x()) {
-            v->pos.x() = BoxSize.x();
+             if(v->force.x() < -Threshold) v->pos.x() = BoxSize.x();
 	    // v->vel -= Dt * v->vel * Friction * v->vel.x() * v->vel.x();
 	    // v->vel = Vec3f(0,0,0);
 	    v->vel.x() = 0;
           }
     if(v->pos.x() < -0.99*BoxSize.x()) {
-            v->pos.x() = -BoxSize.x();
+           if(v->force.x() > Threshold)  v->pos.x() = -BoxSize.x();
             //v->vel -= Dt * v->vel * Friction * v->vel.x() * v->vel.x();
             //v->vel = Vec3f(0,0,0);
-	    v->vel.x() = 0;
+	   v->vel.x() = 0;
           }
     if(v->pos.y() > 0.99*BoxSize.y()) {
-            v->pos.y() = BoxSize.y();
+           if(v->force.y() < -Threshold) v->pos.y() = BoxSize.y();
             //v->vel -= Dt * v->vel * Friction * v->vel.y() * v->vel.y();
             //v->vel = Vec3f(0,0,0);
-	    v->vel.y() = 0;
+	     v->vel.y() = 0;
           }
     if(v->pos.y() < -0.99*BoxSize.y()) {
-            v->pos.y() = -BoxSize.y();
+	  if(v->force.y() > Threshold) v->pos.y() = -BoxSize.y();
            // v->vel -= Dt * v->vel * Friction * v->vel.y() * v->vel.y();
            // v->vel = Vec3f(0,0,0);
-	    v->vel.y() = 0;
+	   v->vel.y() = 0;
           }
     if(v->pos.z() > 0.99*BoxSize.z()) {
-            v->pos.z() = BoxSize.z();
+            if(v->force.z() < -Threshold) v->pos.z() = BoxSize.z();
             //v->vel -= Dt * v->vel * Friction * v->vel.z() * v->vel.z();
             //v->vel = Vec3f(0,0,0);
 	    v->vel.z() = 0;
           }
     if(v->pos.z() < -0.99*BoxSize.z()) {
-            v->pos.z() = -BoxSize.z();
+            if(v->force.z() > Threshold) v->pos.z() = -BoxSize.z();
             //v->vel -= Dt * v->vel * Friction * v->vel.z() * v->vel.z();
             //v->vel = Vec3f(0,0,0);
 	    v->vel.z() = 0;
           }
+    }
   }
 
 
@@ -822,7 +891,36 @@ public:
     
   }
   
+  void toFile()
+  {
+    int n1 = 0;
+    int n2 = 0;
+    float tmp1 = 0;
+    float tmp2 = 0;
+    forall(const vertex &v, S)
+    {
+    if(v->pos.z() > 0.95*BoxSize.z()) {
+            tmp1+=v->force.x();
+	    n1++;
+          }
+    if(v->pos.z() < -0.95*BoxSize.z()) {
+            tmp2+=v->force.x();
+	    n2++;
+          }
+    }
+     QFile numFile(OutputNumericsFileName);
+      QTextStream numOut(&numFile);
 
+        if(!numFile.open(QIODevice::ReadWrite)){
+          cout << "Cannot open output file:" << OutputNumericsFileName.toStdString() << endl;
+        }
+        numFile.readAll();
+        numOut << tmp1/n1 << " " << tmp2/n2 << " " << timing << " "<< ((float)abs(tmp1))/n1/10/timing << " " << ((float)abs(tmp2))/n2/10/timing << " " << 1 - std::min(((float)abs(tmp2))/n2/10/timing,((float)abs(tmp1))/n1/10/timing)/std::max(((float)abs(tmp2))/n2/10/timing,((float)abs(tmp1))/n1/10/timing) << endl;
+        numFile.close();
+    
+    //forall(const vertex &v, S)
+    //cout << v->pos <<" " << v->vel <<" " << v->force <<" " << timing << endl;
+  }
 
 
   //Drawing

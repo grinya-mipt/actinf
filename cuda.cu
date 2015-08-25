@@ -266,7 +266,7 @@ extern "C" {
     Vec3f *Force = (Vec3f *)(&(*VData[force])[0]).get();
     MPREC *Restlen = (MPREC *)(&(*EData[restlen])[0]).get();
     unsigned int *Nb = (unsigned int *)(&(*Nhbd[nb])[0]).get();
-
+/*
     thrust::counting_iterator<int, thrust::device_space_tag> first(0);
     thrust::counting_iterator<int, thrust::device_space_tag> last(NInfo[nb].n);
 
@@ -278,7 +278,7 @@ extern "C" {
       cudaThreadSynchronize();
       thrust::for_each(first, last, mpOP);
       cudaThreadSynchronize();
-    }
+    }*/
     return(0);
   }
 }
